@@ -1,18 +1,24 @@
-import React from 'react';
+"use client";
+
+import React from "react";
+import { Container, Button, Typography, Box } from "@mui/material";
+import Link from "next/link";
 
 export default function Home() {
   return (
-    <section>
-      <h2>ようこそ — Next.js + pnpm + Vercel</h2>
-      <p>
-        App Router と TypeScript を使ったミニマルスターターです。pnpm を標準の
-        パッケージマネージャーとして設定し、Vercel デプロイを想定しています。
-      </p>
-      <p>
-        開発を始めるには <code>pnpm install</code> のあとに{' '}
-        <code>pnpm dev</code> を実行してください。
-      </p>
-    </section>
+    <Container maxWidth="sm" sx={{ py: 6 }}>
+      <Typography variant="h4" gutterBottom>
+        トップページ
+      </Typography>
+      <Typography sx={{ mb: 4 }}>
+        Next.js & MUI サンプル（ボタンで別ページへ遷移できます）
+      </Typography>
+      <Box textAlign="center">
+        <Button component={Link} href="/oshi-game" variant="contained" color="primary" size="large">
+          推し活ミニゲームへ
+        </Button>
+      </Box>
+    </Container>
   );
 }
 
