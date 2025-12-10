@@ -5,7 +5,8 @@ import { Container, Typography, Button, Box } from "@mui/material";
 import { GameProvider, useGame } from "../../contexts/GameContext";
 import HanamichiBoard from "../../components/game/HanamichiBoard";
 import OtakuPieceComponent from "../../components/game/OtakuPiece";
-import { Player, OtakuPiece } from "../../types/game";
+import LaborPhase from "../../components/game/LaborPhase";
+import { Player } from "../../types/game";
 
 // テスト用のプレイヤーデータ
 const createTestPlayers = (): Player[] => [
@@ -38,7 +39,18 @@ const createTestPlayers = (): Player[] => [
 ];
 
 const GameContent: React.FC = () => {
-  const { gameSession, initializeGame, movePiece } = useGame();
+  const { 
+    gameSession, 
+    initializeGame, 
+    movePiece, 
+    nextTurn, 
+    nextPhase, 
+    setPlayerActionCompleted,
+    isPlayerTurn,
+    areAllPlayersReady,
+    getCurrentPlayer,
+    getWaitingPlayers
+  } = useGame();
   const [isGameStarted, setIsGameStarted] = useState(false);
 
   const handleStartGame = () => {
@@ -84,6 +96,13 @@ const GameContent: React.FC = () => {
         推し活ボードゲーム - ゲーム中
       </Typography>
       
+      {/* 労働フェーズの表示 */}
+      {gameSession.currentPhase === 'labor' && (
+        <Box sx={{ mb: 4 }}>
+          <LaborPhase currentPlayerId={getCurrentPlayer()?.id || ''} />
+        </Box>
+      )}
+      
       <Box sx={{ display: 'flex', gap: 3, flexDirection: { xs: 'column', md: 'row' } }}>
         {/* ゲームボード */}
         <Box sx={{ flex: 2, display: 'flex', justifyContent: 'center' }}>
@@ -100,32 +119,57 @@ const GameContent: React.FC = () => {
             プレイヤー情報
           </Typography>
           
-          {gameSession.players.map((player) => (
-            <Box key={player.id} sx={{ mb: 3, p: 2, border: '1px solid #ccc', borderRadius: 1 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 1 }}>
-                {player.name}
-              </Typography>
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                資金: {player.money}金 | ポイント: {player.points}
-              </Typography>
-              
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                オタクコマ:
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                {player.otakuPieces
-                  .filter(piece => !piece.boardSpotId) // ボードに配置されていないコマのみ表示
-                  .map((piece) => (
-                    <OtakuPieceComponent
-                      key={piece.id}
-                      piece={piece}
-                      size="medium"
-                      draggable={true}
-                    />
-                  ))}
+          {gameSession.players.map((player) => {
+            const isCurrentPlayer = isPlayerTurn(player.id);
+            const hasCompletedAction = gameSession.turnManager.phaseActions[player.id];
+            
+            return (
+              <Box key={player.id} sx={{ 
+                mb: 3, 
+                p: 2, 
+                border: isCurrentPlayer ? '2px solid' : '1px solid #ccc',
+                borderColor: isCurrentPlayer ? 'primary.main' : '#ccc',
+                borderRadius: 1,
+                backgroundColor: hasCompletedAction ? '#e8f5e8' : 'transparent'
+              }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                    {player.name}
+                    {isCurrentPlayer && <span style={{ color: 'blue' }}> (現在のターン)</span>}
+                  </Typography>
+                  
+                  <Button
+                    variant={hasCompletedAction ? "outlined" : "contained"}
+                    size="small"
+                    color={hasCompletedAction ? "success" : "primary"}
+                    onClick={() => setPlayerActionCompleted(player.id, !hasCompletedAction)}
+                  >
+                    {hasCompletedAction ? "完了済み" : "アクション完了"}
+                  </Button>
+                </Box>
+                
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  資金: {player.money}金 | ポイント: {player.points}
+                </Typography>
+                
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  オタクコマ:
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  {player.otakuPieces
+                    .filter(piece => !piece.boardSpotId) // ボードに配置されていないコマのみ表示
+                    .map((piece) => (
+                      <OtakuPieceComponent
+                        key={piece.id}
+                        piece={piece}
+                        size="medium"
+                        draggable={true}
+                      />
+                    ))}
+                </Box>
               </Box>
-            </Box>
-          ))}
+            );
+          })}
 
           {/* ゲーム状態表示 */}
           <Box sx={{ mt: 3, p: 2, backgroundColor: '#f5f5f5', borderRadius: 1 }}>
@@ -138,9 +182,61 @@ const GameContent: React.FC = () => {
             <Typography variant="body2">
               フェーズ: {gameSession.currentPhase}
             </Typography>
-            <Typography variant="body2">
-              アクティブプレイヤー: {gameSession.players[gameSession.activePlayerIndex]?.name}
+            <Typography variant="body2" sx={{ 
+              fontWeight: 'bold', 
+              color: 'primary.main',
+              backgroundColor: 'primary.light',
+              p: 1,
+              borderRadius: 1,
+              mt: 1
+            }}>
+              アクティブプレイヤー: {getCurrentPlayer()?.name}
             </Typography>
+            
+            {/* 待機中プレイヤー表示 */}
+            {getWaitingPlayers().length > 0 && (
+              <Box sx={{ mt: 2 }}>
+                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                  アクション待ち:
+                </Typography>
+                {getWaitingPlayers().map(player => (
+                  <Typography key={player.id} variant="body2" sx={{ ml: 1 }}>
+                    • {player.name}
+                  </Typography>
+                ))}
+              </Box>
+            )}
+
+            {/* フェーズ進行ボタン */}
+            <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+              <Button 
+                variant="outlined" 
+                size="small"
+                onClick={nextTurn}
+                disabled={!isPlayerTurn(getCurrentPlayer()?.id || '')}
+              >
+                次のターン
+              </Button>
+              <Button 
+                variant="contained" 
+                size="small"
+                onClick={nextPhase}
+                disabled={!areAllPlayersReady()}
+              >
+                次のフェーズ
+              </Button>
+            </Box>
+
+            {/* 全プレイヤー準備完了表示 */}
+            {areAllPlayersReady() && (
+              <Typography variant="body2" sx={{ 
+                mt: 1, 
+                color: 'success.main',
+                fontWeight: 'bold'
+              }}>
+                全プレイヤー準備完了！
+              </Typography>
+            )}
           </Box>
         </Box>
       </Box>

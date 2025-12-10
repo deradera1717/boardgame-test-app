@@ -101,13 +101,14 @@ export interface GameSession {
   currentPhase: GamePhase;
   activePlayerIndex: number;
   gameState: GameState;
+  turnManager: TurnManager;
   createdAt: Date;
 }
 
 export interface TurnManager {
   currentPlayer: number;
   waitingForPlayers: string[];
-  phaseActions: Map<string, boolean>; // playerId -> completed
+  phaseActions: { [playerId: string]: boolean }; // playerId -> completed
 }
 
 export interface GameError {
