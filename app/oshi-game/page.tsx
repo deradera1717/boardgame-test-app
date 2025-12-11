@@ -6,6 +6,7 @@ import { GameProvider, useGame } from "../../contexts/GameContext";
 import HanamichiBoard from "../../components/game/HanamichiBoard";
 import OtakuPieceComponent from "../../components/game/OtakuPiece";
 import LaborPhase from "../../components/game/LaborPhase";
+import OshikatsuDecisionPhase from "../../components/game/OshikatsuDecisionPhase";
 import { Player } from "../../types/game";
 
 // テスト用のプレイヤーデータ
@@ -100,6 +101,13 @@ const GameContent: React.FC = () => {
       {gameSession.currentPhase === 'labor' && (
         <Box sx={{ mb: 4 }}>
           <LaborPhase currentPlayerId={getCurrentPlayer()?.id || ''} />
+        </Box>
+      )}
+      
+      {/* 推しかつ決断フェーズの表示 */}
+      {gameSession.currentPhase === 'oshikatsu-decision' && (
+        <Box sx={{ mb: 4 }}>
+          <OshikatsuDecisionPhase currentPlayerId={getCurrentPlayer()?.id || ''} />
         </Box>
       )}
       

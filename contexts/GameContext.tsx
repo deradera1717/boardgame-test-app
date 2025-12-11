@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, ReactNode } from 'react';
-import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard } from '../types/game';
-import { createRewardDistributionCards, rollDice, processLaborPhase } from '../utils/gameLogic';
+import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision } from '../types/game';
+import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards } from '../utils/gameLogic';
 
 interface GameContextType {
   gameSession: GameSession | null;
@@ -16,6 +16,9 @@ interface GameContextType {
   getWaitingPlayers: () => Player[];
   selectRewardCard: (playerId: string, cardId: string) => void;
   rollDiceAndProcessLabor: () => void;
+  selectOshikatsuDecision: (playerId: string, decision: OshikatsuDecision) => void;
+  revealOshikatsuDecisions: () => void;
+  generateFanserviceSpotCards: () => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -29,7 +32,10 @@ type GameAction =
   | { type: 'SET_PLAYER_ACTION_COMPLETED'; payload: { playerId: string; completed: boolean } }
   | { type: 'RESET_PHASE_ACTIONS' }
   | { type: 'SELECT_REWARD_CARD'; payload: { playerId: string; cardId: string } }
-  | { type: 'ROLL_DICE_AND_PROCESS_LABOR' };
+  | { type: 'ROLL_DICE_AND_PROCESS_LABOR' }
+  | { type: 'SELECT_OSHIKATSU_DECISION'; payload: { playerId: string; decision: OshikatsuDecision } }
+  | { type: 'REVEAL_OSHIKATSU_DECISIONS' }
+  | { type: 'GENERATE_FANSERVICE_SPOT_CARDS' };
 
 const createInitialBoard = (): HanamichiBoard => {
   const spots: BoardSpot[] = [];
@@ -76,7 +82,7 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         gameState: {
           hanamichiBoardState: createInitialBoard(),
           oshiPieces: createInitialOshiPieces(),
-          fanserviceSpotCards: [],
+          fanserviceSpotCards: createAllFanserviceSpotCards(),
           revealedCards: [],
           rewardDistributionCards: createRewardDistributionCards(),
           roundHistory: []
@@ -174,8 +180,28 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         resetPhaseActions[player.id] = false;
       });
 
+      // フェーズ遷移時にプレイヤーの一時的な選択をクリア
+      const clearedPlayers = state.players.map(player => {
+        const clearedPlayer = { ...player };
+        
+        // 労働フェーズから推しかつ決断フェーズに移る時は報酬カード選択をクリア
+        if (state.currentPhase === 'labor' && nextPhase === 'oshikatsu-decision') {
+          clearedPlayer.selectedRewardCard = undefined;
+        }
+        
+        // 推しかつ決断フェーズから次のフェーズに移る時は推しかつ決断をクリア（次のラウンドまで保持）
+        // ただし、ラウンド終了時にはクリアする
+        if (nextPhase === 'labor') {
+          clearedPlayer.selectedRewardCard = undefined;
+          clearedPlayer.oshikatsuDecision = undefined;
+        }
+        
+        return clearedPlayer;
+      });
+
       return {
         ...state,
+        players: clearedPlayers,
         currentPhase: nextPhase,
         currentRound: nextPhase === 'labor' && state.currentPhase === 'round-end' 
           ? state.currentRound + 1 
@@ -304,6 +330,100 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         }
       };
 
+    case 'SELECT_OSHIKATSU_DECISION':
+      if (!state) return null;
+      const { playerId: decidingPlayerId, decision } = action.payload;
+      
+      // プレイヤーの推しかつ決断を更新
+      const updatedPlayersWithDecision = state.players.map(player => 
+        player.id === decidingPlayerId 
+          ? { ...player, oshikatsuDecision: decision }
+          : player
+      );
+
+      // プレイヤーのアクション完了状態を更新
+      const updatedPhaseActionsForDecision = {
+        ...state.turnManager.phaseActions,
+        [decidingPlayerId]: true
+      };
+
+      const updatedWaitingPlayersForDecision = state.turnManager.waitingForPlayers.filter(
+        id => id !== decidingPlayerId
+      );
+
+      return {
+        ...state,
+        players: updatedPlayersWithDecision,
+        turnManager: {
+          ...state.turnManager,
+          phaseActions: updatedPhaseActionsForDecision,
+          waitingForPlayers: updatedWaitingPlayersForDecision
+        }
+      };
+
+    case 'REVEAL_OSHIKATSU_DECISIONS':
+      if (!state) return null;
+      
+      // 全プレイヤーが推しかつ決断を選択済みかチェック
+      const allPlayersDecided = state.players.every(player => player.oshikatsuDecision);
+      if (!allPlayersDecided) {
+        return state; // まだ決断していないプレイヤーがいる場合は処理しない
+      }
+
+      // 「休む」を選択したプレイヤーに追加報酬を付与
+      const currentRoundHistoryForDecision = state.gameState.roundHistory.find(
+        round => round.roundNumber === state.currentRound
+      );
+
+      const updatedPlayersWithRestReward = state.players.map(player => {
+        if (player.oshikatsuDecision === 'rest') {
+          // 労働フェーズで得た報酬と同額を追加
+          const laborReward = currentRoundHistoryForDecision?.laborResults
+            .find(result => result.playerId === player.id)?.reward || 0;
+          
+          return {
+            ...player,
+            money: player.money + laborReward
+          };
+        }
+        return player;
+      });
+
+      // ラウンド履歴に推しかつ決断を記録
+      const oshikatsuDecisions = state.players.map(player => ({
+        playerId: player.id,
+        decision: player.oshikatsuDecision!
+      }));
+
+      const updatedRoundHistoryWithDecisions = state.gameState.roundHistory.map(round =>
+        round.roundNumber === state.currentRound
+          ? { ...round, oshikatsuDecisions }
+          : round
+      );
+
+      return {
+        ...state,
+        players: updatedPlayersWithRestReward,
+        gameState: {
+          ...state.gameState,
+          roundHistory: updatedRoundHistoryWithDecisions
+        }
+      };
+
+    case 'GENERATE_FANSERVICE_SPOT_CARDS':
+      if (!state) return null;
+      
+      // 推し活フェーズ用のファンサスポットカード3枚を生成
+      const newRevealedCards = prepareOshikatsuPhaseCards(state.gameState.fanserviceSpotCards);
+      
+      return {
+        ...state,
+        gameState: {
+          ...state.gameState,
+          revealedCards: newRevealedCards
+        }
+      };
+
     default:
       return state;
   }
@@ -369,6 +489,18 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     dispatch({ type: 'ROLL_DICE_AND_PROCESS_LABOR' });
   };
 
+  const selectOshikatsuDecision = (playerId: string, decision: OshikatsuDecision) => {
+    dispatch({ type: 'SELECT_OSHIKATSU_DECISION', payload: { playerId, decision } });
+  };
+
+  const revealOshikatsuDecisions = () => {
+    dispatch({ type: 'REVEAL_OSHIKATSU_DECISIONS' });
+  };
+
+  const generateFanserviceSpotCards = () => {
+    dispatch({ type: 'GENERATE_FANSERVICE_SPOT_CARDS' });
+  };
+
   return (
     <GameContext.Provider value={{
       gameSession,
@@ -383,7 +515,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       getCurrentPlayer,
       getWaitingPlayers,
       selectRewardCard,
-      rollDiceAndProcessLabor
+      rollDiceAndProcessLabor,
+      selectOshikatsuDecision,
+      revealOshikatsuDecisions,
+      generateFanserviceSpotCards
     }}>
       {children}
     </GameContext.Provider>

@@ -1,4 +1,4 @@
-import { GamePhase, GameSession, Player, RewardDistributionCard } from '../types/game';
+import { GamePhase, GameSession, Player, RewardDistributionCard, FanserviceSpotCard } from '../types/game';
 
 /**
  * フェーズ遷移のルールを定義
@@ -180,4 +180,106 @@ export const processLaborPhase = (
   });
 
   return { updatedPlayers, laborResults };
+};
+
+/**
+ * 8マス中3マスの全28通りの組み合わせを生成
+ */
+export const generateAllFanserviceSpotCombinations = (): [number, number, number][] => {
+  const combinations: [number, number, number][] = [];
+  
+  // 0-7の8マスから3マスを選ぶ全ての組み合わせ
+  for (let i = 0; i < 8; i++) {
+    for (let j = i + 1; j < 8; j++) {
+      for (let k = j + 1; k < 8; k++) {
+        combinations.push([i, j, k]);
+      }
+    }
+  }
+  
+  return combinations;
+};
+
+/**
+ * ファンサスポットカードの全28通りを生成
+ */
+export const createAllFanserviceSpotCards = (): FanserviceSpotCard[] => {
+  const combinations = generateAllFanserviceSpotCombinations();
+  
+  return combinations.map((spots, index) => ({
+    id: `fanservice-card-${index + 1}`,
+    spots,
+    orientation: 'front', // デフォルトは表
+    rotation: 0 // デフォルトは0度
+  }));
+};
+
+/**
+ * ランダムにファンサスポットカードを3枚選択
+ */
+export const selectRandomFanserviceSpotCards = (
+  allCards: FanserviceSpotCard[],
+  count: number = 3
+): FanserviceSpotCard[] => {
+  if (allCards.length < count) {
+    throw new Error(`Not enough cards available. Required: ${count}, Available: ${allCards.length}`);
+  }
+  
+  // カードをシャッフルして最初のcount枚を選択
+  const shuffledCards = [...allCards].sort(() => Math.random() - 0.5);
+  return shuffledCards.slice(0, count);
+};
+
+/**
+ * カードの表裏をランダムに決定
+ */
+export const randomizeCardOrientation = (): 'front' | 'back' => {
+  return Math.random() < 0.5 ? 'front' : 'back';
+};
+
+/**
+ * カードの向きをランダムに決定
+ */
+export const randomizeCardRotation = (): 0 | 90 | 180 | 270 => {
+  const rotations: (0 | 90 | 180 | 270)[] = [0, 90, 180, 270];
+  return rotations[Math.floor(Math.random() * rotations.length)];
+};
+
+/**
+ * ファンサスポットカードに表裏と向きをランダムに適用
+ */
+export const applyRandomCardProperties = (card: FanserviceSpotCard): FanserviceSpotCard => {
+  return {
+    ...card,
+    orientation: randomizeCardOrientation(),
+    rotation: randomizeCardRotation()
+  };
+};
+
+/**
+ * 推し活フェーズ用のファンサスポットカード3枚を準備
+ */
+export const prepareOshikatsuPhaseCards = (allCards?: FanserviceSpotCard[]): FanserviceSpotCard[] => {
+  // 全カードが提供されていない場合は生成
+  const cards = allCards || createAllFanserviceSpotCards();
+  
+  // ランダムに3枚選択
+  const selectedCards = selectRandomFanserviceSpotCards(cards, 3);
+  
+  // 各カードに表裏と向きをランダムに適用
+  return selectedCards.map(applyRandomCardProperties);
+};
+
+/**
+ * サイコロの出目からファンサスポットを決定
+ * 1-2 → スポット1、3-4 → スポット2、5-6 → スポット3
+ */
+export const mapDiceToFanserviceSpot = (diceResult: number): number => {
+  if (diceResult < 1 || diceResult > 6) {
+    throw new Error(`Invalid dice result: ${diceResult}`);
+  }
+  
+  if (diceResult <= 2) return 0; // スポット1 (インデックス0)
+  if (diceResult <= 4) return 1; // スポット2 (インデックス1)
+  return 2; // スポット3 (インデックス2)
 };
