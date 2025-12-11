@@ -8,6 +8,8 @@ import OtakuPieceComponent from "../../components/game/OtakuPiece";
 import LaborPhase from "../../components/game/LaborPhase";
 import OshikatsuDecisionPhase from "../../components/game/OshikatsuDecisionPhase";
 import OshikatsuPhase from "../../components/game/OshikatsuPhase";
+import RoundEndPhase from "../../components/game/RoundEndPhase";
+import GameResults from "../../components/game/GameResults";
 import { Player } from "../../types/game";
 
 // テスト用のプレイヤーデータ
@@ -51,7 +53,8 @@ const GameContent: React.FC = () => {
     isPlayerTurn,
     areAllPlayersReady,
     getCurrentPlayer,
-    getWaitingPlayers
+    getWaitingPlayers,
+    isGameEnded
   } = useGame();
   const [isGameStarted, setIsGameStarted] = useState(false);
 
@@ -59,6 +62,11 @@ const GameContent: React.FC = () => {
     const players = createTestPlayers();
     initializeGame(players);
     setIsGameStarted(true);
+  };
+
+  const handleNewGame = () => {
+    setIsGameStarted(false);
+    // ゲームセッションは新しく開始する時にリセットされる
   };
 
   const handlePieceDrop = (pieceId: string, spotId: number) => {
@@ -92,6 +100,15 @@ const GameContent: React.FC = () => {
     );
   }
 
+  // ゲーム終了画面
+  if (isGameEnded()) {
+    return (
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <GameResults onNewGame={handleNewGame} />
+      </Container>
+    );
+  }
+
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Typography variant="h5" gutterBottom align="center">
@@ -119,15 +136,24 @@ const GameContent: React.FC = () => {
         </Box>
       )}
       
-      <Box sx={{ display: 'flex', gap: 3, flexDirection: { xs: 'column', md: 'row' } }}>
-        {/* ゲームボード */}
-        <Box sx={{ flex: 2, display: 'flex', justifyContent: 'center' }}>
-          <HanamichiBoard
-            board={gameSession.gameState.hanamichiBoardState}
-            onSpotClick={handleSpotClick}
-            onPieceDrop={handlePieceDrop}
-          />
+      {/* ラウンド終了フェーズの表示 */}
+      {gameSession.currentPhase === 'round-end' && (
+        <Box sx={{ mb: 4 }}>
+          <RoundEndPhase />
         </Box>
+      )}
+      
+      {/* ラウンド終了フェーズでは通常のゲームボードを非表示 */}
+      {gameSession.currentPhase !== 'round-end' && (
+        <Box sx={{ display: 'flex', gap: 3, flexDirection: { xs: 'column', md: 'row' } }}>
+          {/* ゲームボード */}
+          <Box sx={{ flex: 2, display: 'flex', justifyContent: 'center' }}>
+            <HanamichiBoard
+              board={gameSession.gameState.hanamichiBoardState}
+              onSpotClick={handleSpotClick}
+              onPieceDrop={handlePieceDrop}
+            />
+          </Box>
 
         {/* プレイヤー情報とオタクコマ */}
         <Box sx={{ flex: 1 }}>
@@ -255,7 +281,7 @@ const GameContent: React.FC = () => {
             )}
           </Box>
         </Box>
-      </Box>
+      )}
     </Container>
   );
 };

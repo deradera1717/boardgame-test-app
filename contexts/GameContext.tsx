@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
 import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece } from '../types/game';
-import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards, processFansaTime } from '../utils/gameLogic';
+import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards, processFansaTime, isGameComplete, calculateFinalResults, cleanupRoundEnd, getNextGameState } from '../utils/gameLogic';
+import { useGamePersistence } from '../hooks/useGamePersistence';
 
 interface GameContextType {
   gameSession: GameSession | null;
@@ -23,12 +24,21 @@ interface GameContextType {
   createKagebunshin: (playerId: string, originalPieceId: string) => string | null;
   getAvailableOtakuPieces: (playerId: string) => OtakuPiece[];
   processFansaTimePhase: () => void;
+  endRound: () => void;
+  endGame: () => void;
+  getFinalResults: () => ReturnType<typeof calculateFinalResults> | null;
+  isGameEnded: () => boolean;
+  // データ永続化とログ記録機能
+  saveGameManually: () => boolean;
+  exportGameData: (gameId?: string) => string | null;
+  loadSavedGame: () => GameSession | null;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
 
 type GameAction = 
   | { type: 'INITIALIZE_GAME'; payload: Player[] }
+  | { type: 'LOAD_SAVED_GAME'; payload: GameSession }
   | { type: 'UPDATE_GAME_STATE'; payload: Partial<GameState> }
   | { type: 'MOVE_PIECE'; payload: { pieceId: string; spotId: number } }
   | { type: 'NEXT_TURN' }
@@ -42,7 +52,9 @@ type GameAction =
   | { type: 'GENERATE_FANSERVICE_SPOT_CARDS' }
   | { type: 'PURCHASE_GOODS'; payload: { playerId: string; goodsType: GoodsType } }
   | { type: 'CREATE_KAGEBUNSHIN'; payload: { playerId: string; originalPieceId: string; kagebunshinId: string } }
-  | { type: 'PROCESS_FANSA_TIME' };
+  | { type: 'PROCESS_FANSA_TIME' }
+  | { type: 'END_ROUND' }
+  | { type: 'END_GAME' };
 
 const createInitialBoard = (): HanamichiBoard => {
   const spots: BoardSpot[] = [];
@@ -78,6 +90,9 @@ const createInitialTurnManager = (players: Player[]): TurnManager => {
 
 const gameReducer = (state: GameSession | null, action: GameAction): GameSession | null => {
   switch (action.type) {
+    case 'LOAD_SAVED_GAME':
+      return action.payload;
+
     case 'INITIALIZE_GAME':
       const players = action.payload;
       return {
@@ -176,15 +191,9 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
 
     case 'NEXT_PHASE':
       if (!state) return null;
-      // フェーズ遷移ロジックは後で実装
-      const phaseOrder: GamePhase[] = [
-        'setup', 'labor', 'oshikatsu-decision', 'oshikatsu-goods', 
-        'oshikatsu-placement', 'fansa-time', 'round-end'
-      ];
-      const currentPhaseIndex = phaseOrder.indexOf(state.currentPhase);
-      const nextPhase = currentPhaseIndex < phaseOrder.length - 1 
-        ? phaseOrder[currentPhaseIndex + 1] 
-        : 'labor'; // 次のラウンドに進む
+      
+      // 次のゲーム状態を決定
+      const { nextRound, nextPhase } = getNextGameState(state.currentRound, state.currentPhase);
 
       // フェーズアクションをリセット
       const resetPhaseActions: { [playerId: string]: boolean } = {};
@@ -193,7 +202,7 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
       });
 
       // フェーズ遷移時にプレイヤーの一時的な選択をクリア
-      const clearedPlayers = state.players.map(player => {
+      let clearedPlayers = state.players.map(player => {
         const clearedPlayer = { ...player };
         
         // 労働フェーズから推しかつ決断フェーズに移る時は報酬カード選択をクリア
@@ -201,9 +210,8 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
           clearedPlayer.selectedRewardCard = undefined;
         }
         
-        // 推しかつ決断フェーズから次のフェーズに移る時は推しかつ決断をクリア（次のラウンドまで保持）
-        // ただし、ラウンド終了時にはクリアする
-        if (nextPhase === 'labor') {
+        // ラウンド終了時にはすべての一時的な選択をクリア
+        if (nextPhase === 'labor' || nextPhase === 'game-end') {
           clearedPlayer.selectedRewardCard = undefined;
           clearedPlayer.oshikatsuDecision = undefined;
         }
@@ -211,13 +219,16 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         return clearedPlayer;
       });
 
+      // ラウンド終了時のクリーンアップ
+      if (state.currentPhase === 'round-end' && nextPhase === 'labor') {
+        clearedPlayers = cleanupRoundEnd(clearedPlayers);
+      }
+
       return {
         ...state,
         players: clearedPlayers,
         currentPhase: nextPhase,
-        currentRound: nextPhase === 'labor' && state.currentPhase === 'round-end' 
-          ? state.currentRound + 1 
-          : state.currentRound,
+        currentRound: nextRound,
         turnManager: {
           ...state.turnManager,
           phaseActions: resetPhaseActions,
@@ -571,9 +582,13 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
           : round
       );
       
+      // ファンサタイム完了後、自動的にラウンド終了フェーズに移行
+      const shouldEndRound = state.currentPhase === 'fansa-time';
+      
       return {
         ...state,
         players: updatedPlayersWithPoints,
+        currentPhase: shouldEndRound ? 'round-end' : state.currentPhase,
         gameState: {
           ...state.gameState,
           oshiPieces: updatedOshiPieces,
@@ -583,6 +598,45 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         }
       };
 
+    case 'END_ROUND':
+      if (!state) return null;
+      
+      // ラウンド終了処理
+      const cleanedPlayers = cleanupRoundEnd(state.players);
+      
+      // ボード状態をクリア（推しコマを削除）
+      const clearedBoardSpots = state.gameState.hanamichiBoardState.spots.map(spot => ({
+        ...spot,
+        oshiPiece: undefined,
+        otakuPieces: [] // オタクコマも回収
+      }));
+      
+      // 推しコマの位置をリセット
+      const resetOshiPieces = state.gameState.oshiPieces.map(oshi => ({
+        ...oshi,
+        currentSpotId: undefined
+      }));
+      
+      return {
+        ...state,
+        players: cleanedPlayers,
+        currentPhase: 'round-end',
+        gameState: {
+          ...state.gameState,
+          hanamichiBoardState: { spots: clearedBoardSpots },
+          oshiPieces: resetOshiPieces,
+          revealedCards: [] // 公開されたカードもクリア
+        }
+      };
+
+    case 'END_GAME':
+      if (!state) return null;
+      
+      return {
+        ...state,
+        currentPhase: 'game-end'
+      };
+
     default:
       return state;
   }
@@ -590,9 +644,21 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
 
 export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [gameSession, dispatch] = useReducer(gameReducer, null);
+  
+  // データ永続化とログ記録の統合
+  const { loadSavedGame, saveGame, logAction, exportGameData, isGameStateValid } = useGamePersistence(gameSession);
+
+  // 初期化時に保存されたゲームを読み込み
+  useEffect(() => {
+    const savedGame = loadSavedGame();
+    if (savedGame && isGameStateValid(savedGame)) {
+      dispatch({ type: 'LOAD_SAVED_GAME', payload: savedGame });
+    }
+  }, []);
 
   const initializeGame = (players: Player[]) => {
     dispatch({ type: 'INITIALIZE_GAME', payload: players });
+    logAction('GAME_INITIALIZED', { playerCount: players.length, playerNames: players.map(p => p.name) });
   };
 
   const updateGameState = (updates: Partial<GameState>) => {
@@ -642,14 +708,17 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const selectRewardCard = (playerId: string, cardId: string) => {
     dispatch({ type: 'SELECT_REWARD_CARD', payload: { playerId, cardId } });
+    logAction('REWARD_CARD_SELECTED', { cardId }, playerId);
   };
 
   const rollDiceAndProcessLabor = () => {
     dispatch({ type: 'ROLL_DICE_AND_PROCESS_LABOR' });
+    logAction('LABOR_PHASE_PROCESSED', { phase: 'labor' });
   };
 
   const selectOshikatsuDecision = (playerId: string, decision: OshikatsuDecision) => {
     dispatch({ type: 'SELECT_OSHIKATSU_DECISION', payload: { playerId, decision } });
+    logAction('OSHIKATSU_DECISION_SELECTED', { decision }, playerId);
   };
 
   const revealOshikatsuDecisions = () => {
@@ -716,6 +785,31 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const processFansaTimePhase = () => {
     dispatch({ type: 'PROCESS_FANSA_TIME' });
+    logAction('FANSA_TIME_PROCESSED', { phase: 'fansa-time' });
+  };
+
+  const endRound = () => {
+    dispatch({ type: 'END_ROUND' });
+  };
+
+  const endGame = () => {
+    dispatch({ type: 'END_GAME' });
+  };
+
+  const getFinalResults = () => {
+    if (!gameSession) return null;
+    return calculateFinalResults(gameSession.players);
+  };
+
+  const isGameEnded = (): boolean => {
+    if (!gameSession) return false;
+    return gameSession.currentPhase === 'game-end';
+  };
+
+  // データ永続化とログ記録機能の公開
+  const saveGameManually = (): boolean => {
+    if (!gameSession) return false;
+    return saveGame(gameSession);
   };
 
   return (
@@ -739,7 +833,14 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       purchaseGoods,
       createKagebunshin,
       getAvailableOtakuPieces,
-      processFansaTimePhase
+      processFansaTimePhase,
+      endRound,
+      endGame,
+      getFinalResults,
+      isGameEnded,
+      saveGameManually,
+      exportGameData,
+      loadSavedGame
     }}>
       {children}
     </GameContext.Provider>

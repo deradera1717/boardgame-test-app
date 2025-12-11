@@ -582,3 +582,106 @@ export const processFansaTime = (
     diceResults
   };
 };
+
+/**
+ * ゲーム終了条件をチェック（8ラウンド完了）
+ */
+export const isGameComplete = (currentRound: number, currentPhase: GamePhase): boolean => {
+  return currentRound > 8 || (currentRound === 8 && currentPhase === 'round-end');
+};
+
+/**
+ * 最終スコア計算と勝者決定
+ */
+export const calculateFinalResults = (players: Player[]): {
+  finalScores: { playerId: string; playerName: string; totalPoints: number; totalMoney: number }[];
+  winners: { playerId: string; playerName: string; totalPoints: number }[];
+  gameStats: {
+    totalRounds: number;
+    highestScore: number;
+    averageScore: number;
+  };
+} => {
+  // 最終スコア計算（ポイント + 残り資金）
+  const finalScores = players.map(player => ({
+    playerId: player.id,
+    playerName: player.name,
+    totalPoints: player.points,
+    totalMoney: player.money
+  })).sort((a, b) => b.totalPoints - a.totalPoints); // ポイント降順でソート
+
+  // 勝者決定（最高ポイントのプレイヤー、同点の場合は複数勝者）
+  const highestScore = finalScores[0]?.totalPoints || 0;
+  const winners = finalScores.filter(score => score.totalPoints === highestScore);
+
+  // ゲーム統計
+  const gameStats = {
+    totalRounds: 8,
+    highestScore,
+    averageScore: finalScores.length > 0 
+      ? Math.round(finalScores.reduce((sum, score) => sum + score.totalPoints, 0) / finalScores.length)
+      : 0
+  };
+
+  return {
+    finalScores,
+    winners,
+    gameStats
+  };
+};
+
+/**
+ * ラウンド終了時のクリーンアップ処理
+ */
+export const cleanupRoundEnd = (players: Player[]): Player[] => {
+  return players.map(player => ({
+    ...player,
+    // ボードからオタクコマを回収
+    otakuPieces: player.otakuPieces.map(piece => ({
+      ...piece,
+      boardSpotId: undefined,
+      // 影分身は削除
+      ...(piece.isKagebunshin ? { toRemove: true } : {})
+    })).filter((piece: any) => !piece.toRemove),
+    // 一時的な選択状態をクリア
+    selectedRewardCard: undefined,
+    oshikatsuDecision: undefined
+  }));
+};
+
+/**
+ * 次のラウンドへの進行判定
+ */
+export const shouldAdvanceToNextRound = (currentPhase: GamePhase): boolean => {
+  return currentPhase === 'round-end';
+};
+
+/**
+ * ゲーム進行の次のフェーズまたはラウンドを決定
+ */
+export const getNextGameState = (
+  currentRound: number, 
+  currentPhase: GamePhase
+): { nextRound: number; nextPhase: GamePhase } => {
+  // ゲーム終了チェック
+  if (isGameComplete(currentRound, currentPhase)) {
+    return { nextRound: currentRound, nextPhase: 'game-end' };
+  }
+
+  // 通常のフェーズ遷移
+  const nextPhase = getNextPhase(currentPhase);
+  
+  // ラウンド終了から次のラウンドの労働フェーズへ
+  if (currentPhase === 'round-end' && nextPhase === 'labor') {
+    const nextRound = currentRound + 1;
+    
+    // 8ラウンド完了後はゲーム終了
+    if (nextRound > 8) {
+      return { nextRound: currentRound, nextPhase: 'game-end' };
+    }
+    
+    return { nextRound, nextPhase };
+  }
+
+  return { nextRound: currentRound, nextPhase };
+};
