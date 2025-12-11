@@ -9,7 +9,9 @@ import { getNextPlayerIndex } from '../utils/gameLogic';
 
 // テスト用のプレイヤー生成
 const playerArbitrary = fc.record({
-  id: fc.string({ minLength: 1, maxLength: 10 }).filter(s => /^[a-zA-Z0-9_-]+$/.test(s)),
+  id: fc.string({ minLength: 1, maxLength: 10 })
+    .filter(s => /^[a-zA-Z0-9_-]+$/.test(s))
+    .filter(s => !['__proto__', 'constructor', 'prototype', 'toString', 'valueOf'].includes(s)), // JavaScript特殊プロパティを除外
   name: fc.string({ minLength: 1, maxLength: 20 }).filter(s => s.trim().length > 0),
   color: fc.constantFrom('red', 'blue', 'green', 'yellow'),
   money: fc.integer({ min: 0, max: 100 }),
@@ -125,7 +127,7 @@ describe('ターン管理システム プロパティベーステスト', () => 
       phaseActions: fc.record({}), // 動的に生成
     }).map(({ players }) => {
       // プレイヤーIDに基づいてphaseActionsを生成
-      const phaseActions: { [playerId: string]: boolean } = {};
+      const phaseActions: { [playerId: string]: boolean } = Object.create(null); // プロトタイプチェーンを持たないオブジェクトを作成
       players.forEach(player => {
         phaseActions[player.id] = fc.sample(fc.boolean(), 1)[0];
       });

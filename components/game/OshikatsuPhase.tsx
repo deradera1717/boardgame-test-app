@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react';
 import { useGame } from '../../contexts/GameContext';
 import FanserviceSpotCardsDisplay from './FanserviceSpotCardsDisplay';
+import GoodsPurchase from './GoodsPurchase';
+import OtakuPiecePlacement from './OtakuPiecePlacement';
 
 interface OshikatsuPhaseProps {
   className?: string;
@@ -63,22 +65,50 @@ const OshikatsuPhase: React.FC<OshikatsuPhaseProps> = ({ className = '' }) => {
         </div>
 
         {currentPhase === 'oshikatsu-goods' && (
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <h3 className="font-semibold mb-2">グッズ購入フェーズ</h3>
-            <p className="text-sm text-gray-600">
-              ファンサスポットを予測してグッズを購入しましょう。
-              うちわ、ペンライト、差し入れから選択できます。
-            </p>
+          <div className="space-y-4">
+            <div className="bg-blue-50 p-4 rounded-lg">
+              <h3 className="font-semibold mb-2">グッズ購入フェーズ</h3>
+              <p className="text-sm text-gray-600">
+                ファンサスポットを予測してグッズを購入しましょう。
+                うちわ、ペンライト、差し入れから選択できます。
+              </p>
+            </div>
+            
+            {/* 各プレイヤーのグッズ購入UI */}
+            <div className="grid gap-4">
+              {gameSession.players
+                .filter(player => player.oshikatsuDecision === 'participate')
+                .map(player => (
+                  <GoodsPurchase 
+                    key={player.id} 
+                    playerId={player.id}
+                  />
+                ))}
+            </div>
           </div>
         )}
 
         {currentPhase === 'oshikatsu-placement' && (
-          <div className="bg-green-50 p-4 rounded-lg">
-            <h3 className="font-semibold mb-2">オタクコマ配置フェーズ</h3>
-            <p className="text-sm text-gray-600">
-              購入したグッズを持ったオタクコマを花道ボードに配置しましょう。
-              各マスには最大3個まで配置できます。
-            </p>
+          <div className="space-y-4">
+            <div className="bg-green-50 p-4 rounded-lg">
+              <h3 className="font-semibold mb-2">オタクコマ配置フェーズ</h3>
+              <p className="text-sm text-gray-600">
+                購入したグッズを持ったオタクコマを花道ボードに配置しましょう。
+                各マスには最大3個まで配置できます。
+              </p>
+            </div>
+            
+            {/* 各プレイヤーのオタクコマ配置UI */}
+            <div className="grid gap-4">
+              {gameSession.players
+                .filter(player => player.oshikatsuDecision === 'participate')
+                .map(player => (
+                  <OtakuPiecePlacement 
+                    key={player.id} 
+                    playerId={player.id}
+                  />
+                ))}
+            </div>
           </div>
         )}
 

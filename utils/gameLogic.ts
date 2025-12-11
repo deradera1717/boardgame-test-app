@@ -283,3 +283,302 @@ export const mapDiceToFanserviceSpot = (diceResult: number): number => {
   if (diceResult <= 4) return 1; // スポット2 (インデックス1)
   return 2; // スポット3 (インデックス2)
 };
+
+/**
+ * ファンサタイムでの推しコマ配置を決定
+ */
+export const placeFansaOshiPieces = (
+  revealedCards: FanserviceSpotCard[],
+  diceResults: [number, number, number] // A, B, C の順
+): { oshiId: 'A' | 'B' | 'C'; spotId: number }[] => {
+  if (revealedCards.length !== 3) {
+    throw new Error(`Expected 3 revealed cards, got ${revealedCards.length}`);
+  }
+  
+  if (diceResults.length !== 3) {
+    throw new Error(`Expected 3 dice results, got ${diceResults.length}`);
+  }
+  
+  const placements: { oshiId: 'A' | 'B' | 'C'; spotId: number }[] = [];
+  const oshiIds: ('A' | 'B' | 'C')[] = ['A', 'B', 'C'];
+  
+  for (let i = 0; i < 3; i++) {
+    const card = revealedCards[i];
+    const diceResult = diceResults[i];
+    const oshiId = oshiIds[i];
+    
+    // サイコロの出目からスポットインデックスを決定
+    const spotIndex = mapDiceToFanserviceSpot(diceResult);
+    
+    // カードの指定されたスポットを取得
+    const spotId = card.spots[spotIndex];
+    
+    placements.push({ oshiId, spotId });
+  }
+  
+  return placements;
+};
+
+/**
+ * 隣接するスポットIDを取得（うちわボーナス用）
+ */
+export const getAdjacentSpots = (spotId: number): number[] => {
+  const row = Math.floor(spotId / 4);
+  const col = spotId % 4;
+  const adjacentSpots: number[] = [];
+  
+  // 上下左右の隣接スポットを計算
+  const directions = [
+    [-1, 0], [1, 0], [0, -1], [0, 1] // 上、下、左、右
+  ];
+  
+  directions.forEach(([dRow, dCol]) => {
+    const newRow = row + dRow;
+    const newCol = col + dCol;
+    
+    // ボード範囲内かチェック（2行4列）
+    if (newRow >= 0 && newRow < 2 && newCol >= 0 && newCol < 4) {
+      adjacentSpots.push(newRow * 4 + newCol);
+    }
+  });
+  
+  return adjacentSpots;
+};
+
+/**
+ * 向かい側のスポットIDを取得（ペンライトボーナス用）
+ */
+export const getOppositeSpot = (spotId: number): number | null => {
+  const row = Math.floor(spotId / 4);
+  const col = spotId % 4;
+  
+  // 向かい側の行を計算（0 <-> 1）
+  const oppositeRow = row === 0 ? 1 : 0;
+  const oppositeSpotId = oppositeRow * 4 + col;
+  
+  return oppositeSpotId;
+};
+
+/**
+ * 基本ポイント計算（目の前6ポイント山分け）
+ */
+export const calculateBasicPoints = (
+  spotId: number,
+  otakuPieces: any[]
+): { playerId: string; points: number }[] => {
+  if (otakuPieces.length === 0) {
+    return [];
+  }
+  
+  // 6ポイントを山分け
+  const basePoints = 6;
+  const pointsPerPiece = Math.floor(basePoints / otakuPieces.length);
+  const remainder = basePoints % otakuPieces.length;
+  
+  const results: { playerId: string; points: number }[] = [];
+  
+  otakuPieces.forEach((piece, index) => {
+    let points = pointsPerPiece;
+    
+    // 端数を最初のピースから順に配分
+    if (index < remainder) {
+      points += 1;
+    }
+    
+    results.push({
+      playerId: piece.playerId,
+      points
+    });
+  });
+  
+  return results;
+};
+
+/**
+ * うちわボーナス計算（隣接1ポイント）
+ */
+export const calculateUchiwaBonus = (
+  oshiSpotId: number,
+  allOtakuPieces: any[]
+): { playerId: string; points: number }[] => {
+  const adjacentSpots = getAdjacentSpots(oshiSpotId);
+  const results: { playerId: string; points: number }[] = [];
+  
+  // 隣接スポットにいるうちわ持ちオタクコマを探す
+  allOtakuPieces.forEach(piece => {
+    if (piece.goods === 'uchiwa' && 
+        piece.boardSpotId !== undefined && 
+        adjacentSpots.includes(piece.boardSpotId)) {
+      results.push({
+        playerId: piece.playerId,
+        points: 1
+      });
+    }
+  });
+  
+  return results;
+};
+
+/**
+ * ペンライトボーナス計算（向かい側1ポイント）
+ */
+export const calculatePenlightBonus = (
+  oshiSpotId: number,
+  allOtakuPieces: any[]
+): { playerId: string; points: number }[] => {
+  const oppositeSpot = getOppositeSpot(oshiSpotId);
+  const results: { playerId: string; points: number }[] = [];
+  
+  if (oppositeSpot === null) {
+    return results;
+  }
+  
+  // 向かい側スポットにいるペンライト持ちオタクコマを探す
+  allOtakuPieces.forEach(piece => {
+    if (piece.goods === 'penlight' && 
+        piece.boardSpotId === oppositeSpot) {
+      results.push({
+        playerId: piece.playerId,
+        points: 1
+      });
+    }
+  });
+  
+  return results;
+};
+
+/**
+ * 差し入れボーナス計算（目の前のポイント2倍）
+ */
+export const applySashiireBonus = (
+  spotId: number,
+  otakuPieces: any[],
+  basicPointResults: { playerId: string; points: number }[]
+): { playerId: string; points: number }[] => {
+  const results: { playerId: string; points: number }[] = [];
+  
+  // 差し入れを持つオタクコマを探す
+  const sashiirePieces = otakuPieces.filter(piece => piece.goods === 'sashiire');
+  
+  basicPointResults.forEach(result => {
+    const hasSashiire = sashiirePieces.some(piece => piece.playerId === result.playerId);
+    
+    results.push({
+      playerId: result.playerId,
+      points: hasSashiire ? result.points * 2 : result.points
+    });
+  });
+  
+  return results;
+};
+
+/**
+ * 包括的ポイント計算システム
+ */
+export const calculateFansaPoints = (
+  oshiPlacements: { oshiId: 'A' | 'B' | 'C'; spotId: number }[],
+  boardState: any,
+  allOtakuPieces: any[]
+): { playerId: string; totalPoints: number; breakdown: string[] }[] => {
+  const playerPointsMap = new Map<string, { points: number; breakdown: string[] }>();
+  
+  // 各推しの配置について計算
+  oshiPlacements.forEach(({ oshiId, spotId }) => {
+    // そのスポットにいるオタクコマを取得
+    const spot = boardState.spots.find((s: any) => s.id === spotId);
+    if (!spot) return;
+    
+    const otakuPiecesAtSpot = spot.otakuPieces || [];
+    
+    // 基本ポイント計算（6ポイント山分け）
+    const basicPoints = calculateBasicPoints(spotId, otakuPiecesAtSpot);
+    
+    // 差し入れボーナス適用（基本ポイントを2倍）
+    const sashiireAdjustedPoints = applySashiireBonus(spotId, otakuPiecesAtSpot, basicPoints);
+    
+    // 基本ポイント（差し入れ調整済み）を加算
+    sashiireAdjustedPoints.forEach(({ playerId, points }) => {
+      if (!playerPointsMap.has(playerId)) {
+        playerPointsMap.set(playerId, { points: 0, breakdown: [] });
+      }
+      
+      const playerData = playerPointsMap.get(playerId)!;
+      playerData.points += points;
+      
+      const originalPoints = basicPoints.find(bp => bp.playerId === playerId)?.points || 0;
+      if (points > originalPoints) {
+        playerData.breakdown.push(`推し${oshiId}目の前(差し入れ2倍): ${points}ポイント`);
+      } else {
+        playerData.breakdown.push(`推し${oshiId}目の前: ${points}ポイント`);
+      }
+    });
+    
+    // うちわボーナス計算
+    const uchiwaBonus = calculateUchiwaBonus(spotId, allOtakuPieces);
+    uchiwaBonus.forEach(({ playerId, points }) => {
+      if (!playerPointsMap.has(playerId)) {
+        playerPointsMap.set(playerId, { points: 0, breakdown: [] });
+      }
+      
+      const playerData = playerPointsMap.get(playerId)!;
+      playerData.points += points;
+      playerData.breakdown.push(`推し${oshiId}隣接(うちわ): ${points}ポイント`);
+    });
+    
+    // ペンライトボーナス計算
+    const penlightBonus = calculatePenlightBonus(spotId, allOtakuPieces);
+    penlightBonus.forEach(({ playerId, points }) => {
+      if (!playerPointsMap.has(playerId)) {
+        playerPointsMap.set(playerId, { points: 0, breakdown: [] });
+      }
+      
+      const playerData = playerPointsMap.get(playerId)!;
+      playerData.points += points;
+      playerData.breakdown.push(`推し${oshiId}向かい側(ペンライト): ${points}ポイント`);
+    });
+  });
+  
+  // 結果を配列に変換
+  const results: { playerId: string; totalPoints: number; breakdown: string[] }[] = [];
+  playerPointsMap.forEach((data, playerId) => {
+    results.push({
+      playerId,
+      totalPoints: data.points,
+      breakdown: data.breakdown
+    });
+  });
+  
+  return results;
+};
+
+/**
+ * ファンサタイム全体の処理
+ */
+export const processFansaTime = (
+  revealedCards: FanserviceSpotCard[],
+  boardState: any,
+  allOtakuPieces: any[]
+): {
+  oshiPlacements: { oshiId: 'A' | 'B' | 'C'; spotId: number }[];
+  pointResults: { playerId: string; totalPoints: number; breakdown: string[] }[];
+  diceResults: [number, number, number];
+} => {
+  // 各推しのサイコロを振る
+  const diceResults: [number, number, number] = [
+    rollDice(), // 推しA
+    rollDice(), // 推しB
+    rollDice()  // 推しC
+  ];
+  
+  // 推しコマの配置を決定
+  const oshiPlacements = placeFansaOshiPieces(revealedCards, diceResults);
+  
+  // ポイント計算
+  const pointResults = calculateFansaPoints(oshiPlacements, boardState, allOtakuPieces);
+  
+  return {
+    oshiPlacements,
+    pointResults,
+    diceResults
+  };
+};

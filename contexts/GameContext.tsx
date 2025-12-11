@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, ReactNode } from 'react';
-import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision } from '../types/game';
-import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards } from '../utils/gameLogic';
+import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece } from '../types/game';
+import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards, processFansaTime } from '../utils/gameLogic';
 
 interface GameContextType {
   gameSession: GameSession | null;
@@ -19,6 +19,10 @@ interface GameContextType {
   selectOshikatsuDecision: (playerId: string, decision: OshikatsuDecision) => void;
   revealOshikatsuDecisions: () => void;
   generateFanserviceSpotCards: () => void;
+  purchaseGoods: (playerId: string, goodsType: GoodsType) => boolean;
+  createKagebunshin: (playerId: string, originalPieceId: string) => string | null;
+  getAvailableOtakuPieces: (playerId: string) => OtakuPiece[];
+  processFansaTimePhase: () => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -35,7 +39,10 @@ type GameAction =
   | { type: 'ROLL_DICE_AND_PROCESS_LABOR' }
   | { type: 'SELECT_OSHIKATSU_DECISION'; payload: { playerId: string; decision: OshikatsuDecision } }
   | { type: 'REVEAL_OSHIKATSU_DECISIONS' }
-  | { type: 'GENERATE_FANSERVICE_SPOT_CARDS' };
+  | { type: 'GENERATE_FANSERVICE_SPOT_CARDS' }
+  | { type: 'PURCHASE_GOODS'; payload: { playerId: string; goodsType: GoodsType } }
+  | { type: 'CREATE_KAGEBUNSHIN'; payload: { playerId: string; originalPieceId: string; kagebunshinId: string } }
+  | { type: 'PROCESS_FANSA_TIME' };
 
 const createInitialBoard = (): HanamichiBoard => {
   const spots: BoardSpot[] = [];
@@ -122,6 +129,11 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
       
       if (!piece) {
         return state; // ピースが見つからない場合は状態を変更しない
+      }
+      
+      // グッズを持っていないピースは配置不可
+      if (!piece.goods) {
+        return state; // グッズを持っていない場合は配置不可
       }
       
       // 移動元からピースを削除
@@ -424,6 +436,153 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         }
       };
 
+    case 'PURCHASE_GOODS':
+      if (!state) return null;
+      const { playerId: buyerPlayerId, goodsType } = action.payload;
+      
+      // グッズの価格設定
+      const goodsPrices = {
+        uchiwa: 1,
+        penlight: 1,
+        sashiire: 2
+      };
+      
+      const price = goodsPrices[goodsType];
+      const buyer = state.players.find(p => p.id === buyerPlayerId);
+      
+      if (!buyer || buyer.money < price) {
+        return state; // 資金不足の場合は購入不可
+      }
+      
+      // 利用可能なオタクコマを探す（グッズを持っていない、ボードに配置されていない）
+      const availablePiece = buyer.otakuPieces.find(piece => 
+        !piece.goods && piece.boardSpotId === undefined
+      );
+      
+      if (!availablePiece) {
+        return state; // 利用可能なオタクコマがない場合は購入不可
+      }
+      
+      // プレイヤーの資金を減らし、オタクコマにグッズを付与
+      const updatedPlayersWithGoods = state.players.map(player => {
+        if (player.id === buyerPlayerId) {
+          return {
+            ...player,
+            money: player.money - price,
+            otakuPieces: player.otakuPieces.map(piece => 
+              piece.id === availablePiece.id 
+                ? { ...piece, goods: goodsType }
+                : piece
+            )
+          };
+        }
+        return player;
+      });
+      
+      return {
+        ...state,
+        players: updatedPlayersWithGoods
+      };
+
+    case 'CREATE_KAGEBUNSHIN':
+      if (!state) return null;
+      const { playerId: kagePlayerId, originalPieceId, kagebunshinId } = action.payload;
+      
+      const kagePlayer = state.players.find(p => p.id === kagePlayerId);
+      const originalPiece = kagePlayer?.otakuPieces.find(p => p.id === originalPieceId);
+      
+      if (!kagePlayer || !originalPiece || !originalPiece.goods) {
+        return state; // プレイヤーまたはピースが見つからない、またはグッズを持っていない場合は作成不可
+      }
+      
+      // 差し入れを持っている場合のみ影分身を作成可能
+      if (originalPiece.goods !== 'sashiire') {
+        return state;
+      }
+      
+      // 新しい影分身ピースを作成
+      const kagebunshinPiece: OtakuPiece = {
+        id: kagebunshinId,
+        playerId: kagePlayerId,
+        boardSpotId: undefined,
+        goods: originalPiece.goods,
+        isKagebunshin: true
+      };
+      
+      // プレイヤーのオタクコマリストに影分身を追加
+      const updatedPlayersWithKage = state.players.map(player => {
+        if (player.id === kagePlayerId) {
+          return {
+            ...player,
+            otakuPieces: [...player.otakuPieces, kagebunshinPiece]
+          };
+        }
+        return player;
+      });
+      
+      return {
+        ...state,
+        players: updatedPlayersWithKage
+      };
+
+    case 'PROCESS_FANSA_TIME':
+      if (!state) return null;
+      
+      // ファンサタイムの処理を実行
+      const allOtakuPieces = state.players.flatMap(player => player.otakuPieces);
+      const { oshiPlacements, pointResults, diceResults } = processFansaTime(
+        state.gameState.revealedCards,
+        state.gameState.hanamichiBoardState,
+        allOtakuPieces
+      );
+      
+      // 推しコマの位置を更新
+      const updatedOshiPieces = state.gameState.oshiPieces.map(oshi => {
+        const placement = oshiPlacements.find(p => p.oshiId === oshi.id);
+        return placement ? { ...oshi, currentSpotId: placement.spotId } : oshi;
+      });
+      
+      // ボード状態を更新（推しコマを配置）
+      const updatedBoardSpots = state.gameState.hanamichiBoardState.spots.map(spot => {
+        const oshiAtSpot = oshiPlacements.find(p => p.spotId === spot.id);
+        return oshiAtSpot 
+          ? { ...spot, oshiPiece: updatedOshiPieces.find(o => o.id === oshiAtSpot.oshiId) }
+          : { ...spot, oshiPiece: undefined };
+      });
+      
+      // プレイヤーのポイントを更新
+      const updatedPlayersWithPoints = state.players.map(player => {
+        const playerResult = pointResults.find(r => r.playerId === player.id);
+        return playerResult 
+          ? { ...player, points: player.points + playerResult.totalPoints }
+          : player;
+      });
+      
+      // ラウンド履歴にファンサ結果を記録
+      const fansaResults = pointResults.map(result => ({
+        playerId: result.playerId,
+        pointsEarned: result.totalPoints,
+        breakdown: result.breakdown
+      }));
+      
+      const updatedRoundHistoryWithFansa = state.gameState.roundHistory.map(round =>
+        round.roundNumber === state.currentRound
+          ? { ...round, fansaResults }
+          : round
+      );
+      
+      return {
+        ...state,
+        players: updatedPlayersWithPoints,
+        gameState: {
+          ...state.gameState,
+          oshiPieces: updatedOshiPieces,
+          hanamichiBoardState: { spots: updatedBoardSpots },
+          roundHistory: updatedRoundHistoryWithFansa,
+          currentDiceResult: diceResults[0] // 最初のサイコロ結果を保存（表示用）
+        }
+      };
+
     default:
       return state;
   }
@@ -501,6 +660,64 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     dispatch({ type: 'GENERATE_FANSERVICE_SPOT_CARDS' });
   };
 
+  const purchaseGoods = (playerId: string, goodsType: GoodsType): boolean => {
+    if (!gameSession) return false;
+    
+    const player = gameSession.players.find(p => p.id === playerId);
+    if (!player) return false;
+    
+    // グッズの価格設定
+    const goodsPrices = {
+      uchiwa: 1,
+      penlight: 1,
+      sashiire: 2
+    };
+    
+    const price = goodsPrices[goodsType];
+    
+    // 資金チェック
+    if (player.money < price) return false;
+    
+    // 利用可能なオタクコマチェック
+    const availablePiece = player.otakuPieces.find(piece => 
+      !piece.goods && piece.boardSpotId === undefined
+    );
+    
+    if (!availablePiece) return false;
+    
+    dispatch({ type: 'PURCHASE_GOODS', payload: { playerId, goodsType } });
+    return true;
+  };
+
+  const createKagebunshin = (playerId: string, originalPieceId: string): string | null => {
+    if (!gameSession) return null;
+    
+    const player = gameSession.players.find(p => p.id === playerId);
+    const originalPiece = player?.otakuPieces.find(p => p.id === originalPieceId);
+    
+    if (!player || !originalPiece || originalPiece.goods !== 'sashiire') {
+      return null;
+    }
+    
+    const kagebunshinId = `${originalPieceId}-kage-${Date.now()}`;
+    dispatch({ type: 'CREATE_KAGEBUNSHIN', payload: { playerId, originalPieceId, kagebunshinId } });
+    return kagebunshinId;
+  };
+
+  const getAvailableOtakuPieces = (playerId: string): OtakuPiece[] => {
+    if (!gameSession) return [];
+    
+    const player = gameSession.players.find(p => p.id === playerId);
+    if (!player) return [];
+    
+    // ボードに配置されていないオタクコマを返す
+    return player.otakuPieces.filter(piece => piece.boardSpotId === undefined);
+  };
+
+  const processFansaTimePhase = () => {
+    dispatch({ type: 'PROCESS_FANSA_TIME' });
+  };
+
   return (
     <GameContext.Provider value={{
       gameSession,
@@ -518,7 +735,11 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       rollDiceAndProcessLabor,
       selectOshikatsuDecision,
       revealOshikatsuDecisions,
-      generateFanserviceSpotCards
+      generateFanserviceSpotCards,
+      purchaseGoods,
+      createKagebunshin,
+      getAvailableOtakuPieces,
+      processFansaTimePhase
     }}>
       {children}
     </GameContext.Provider>

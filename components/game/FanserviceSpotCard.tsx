@@ -1,5 +1,5 @@
 import React from 'react';
-import { FanserviceSpotCard } from '../../types/game';
+import type { FanserviceSpotCard } from '../../types/game';
 
 interface FanserviceSpotCardProps {
   card: FanserviceSpotCard;

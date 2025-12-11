@@ -30,7 +30,8 @@
       "@/contexts/*": ["./contexts/*"]
     },
     "types": [
-      "@types/node"
+      "@types/node",
+      "@types/jest"
     ]
   },
   "include": [
