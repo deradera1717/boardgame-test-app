@@ -47,7 +47,7 @@ export const ERROR_MESSAGES = {
 export const createGameError = (
   type: ErrorType,
   message: string,
-  playerId?: string,
+  playerId?: string | null,
   context?: any
 ): GameError => ({
   type,

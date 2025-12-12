@@ -544,7 +544,7 @@ describe('データ永続化とログ記録システム プロパティベース
       id: 'test-game',
       players: [],
       currentRound: 1,
-      currentPhase: 'setup',
+      currentPhase: 'labor',
       activePlayerIndex: 0,
       gameState: {
         hanamichiBoardState: { spots: [] },

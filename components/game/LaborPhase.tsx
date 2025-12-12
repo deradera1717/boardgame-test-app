@@ -39,12 +39,14 @@ const LaborPhase: React.FC<LaborPhaseProps> = ({ currentPlayerId }) => {
         <h3 className="text-lg font-semibold mb-4 text-center">
           報酬配分カードを選択してください
         </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-6xl mx-auto">
+        <div className="flex overflow-x-auto gap-4 pb-4 px-4">
+          <div className="flex gap-4 mx-auto">
           {gameSession.gameState.rewardDistributionCards.map((card, index) => (
             <div
               key={card.id}
               className={`
                 border-3 p-4 rounded-xl cursor-pointer transition-all duration-300 transform
+                w-48 flex-shrink-0
                 ${currentPlayer?.selectedRewardCard?.id === card.id
                   ? 'border-blue-500 bg-blue-100 scale-105 shadow-lg'
                   : hasSelectedCard
@@ -85,6 +87,7 @@ const LaborPhase: React.FC<LaborPhaseProps> = ({ currentPlayerId }) => {
               </div>
             </div>
           ))}
+          </div>
         </div>
       </div>
 

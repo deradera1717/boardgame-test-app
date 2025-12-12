@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
-import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece, GameError } from '../types/game';
+import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, OshikatsuSubPhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece, GameError, GOODS_PRICES, GameOperation, ValidationResult, GameLogEntry } from '../types/game';
 import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards, processFansaTime, isGameComplete, calculateFinalResults, cleanupRoundEnd, getNextGameState } from '../utils/gameLogic';
 import { useGamePersistence } from '../hooks/useGamePersistence';
 import { useErrorHandler } from '../hooks/useErrorHandler';
@@ -19,6 +19,7 @@ interface GameContextType {
   movePiece: (pieceId: string, spotId: number) => void;
   nextTurn: () => void;
   nextPhase: () => void;
+  nextSubPhase: () => void;
   setPlayerActionCompleted: (playerId: string, completed: boolean) => void;
   isPlayerTurn: (playerId: string) => boolean;
   areAllPlayersReady: () => boolean;
@@ -57,6 +58,7 @@ type GameAction =
   | { type: 'MOVE_PIECE'; payload: { pieceId: string; spotId: number } }
   | { type: 'NEXT_TURN' }
   | { type: 'NEXT_PHASE' }
+  | { type: 'NEXT_SUB_PHASE' }
   | { type: 'SET_PLAYER_ACTION_COMPLETED'; payload: { playerId: string; completed: boolean } }
   | { type: 'RESET_PHASE_ACTIONS' }
   | { type: 'SELECT_REWARD_CARD'; payload: { playerId: string; cardId: string } }
@@ -98,8 +100,32 @@ const createInitialTurnManager = (players: Player[]): TurnManager => {
   return {
     currentPlayer: 0,
     waitingForPlayers: players.map(p => p.id),
-    phaseActions
+    phaseActions,
+    nextPlayer: function() {
+      this.currentPlayer = (this.currentPlayer + 1) % players.length;
+    },
+    isPlayerTurn: function(playerId: string): boolean {
+      return players[this.currentPlayer]?.id === playerId;
+    },
+    allPlayersCompleted: function(): boolean {
+      return players.every(player => this.phaseActions[player.id] === true);
+    }
   };
+};
+
+// 推し活フェーズのサブステップ管理
+const getNextOshikatsuSubPhase = (currentSubPhase?: OshikatsuSubPhase): OshikatsuSubPhase | null => {
+  switch (currentSubPhase) {
+    case undefined:
+    case 'card-reveal':
+      return 'goods-purchase';
+    case 'goods-purchase':
+      return 'piece-placement';
+    case 'piece-placement':
+      return null; // 推し活フェーズ完了
+    default:
+      return null;
+  }
 };
 
 const gameReducer = (state: GameSession | null, action: GameAction): GameSession | null => {
@@ -113,7 +139,7 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         id: `game-${Date.now()}`,
         players,
         currentRound: 1,
-        currentPhase: 'setup',
+        currentPhase: 'labor',
         activePlayerIndex: 0,
         gameState: {
           hanamichiBoardState: createInitialBoard(),
@@ -238,14 +264,62 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
         clearedPlayers = cleanupRoundEnd(clearedPlayers);
       }
 
+      // 推し活フェーズに入る場合はサブフェーズを初期化
+      let initialSubPhase: OshikatsuSubPhase | undefined = undefined;
+      if (nextPhase === 'oshikatsu-card-reveal') {
+        initialSubPhase = 'card-reveal';
+      }
+
       return {
         ...state,
         players: clearedPlayers,
         currentPhase: nextPhase,
+        currentSubPhase: initialSubPhase,
         currentRound: nextRound,
         turnManager: {
           ...state.turnManager,
           phaseActions: resetPhaseActions,
+          waitingForPlayers: state.players.map(p => p.id)
+        }
+      };
+
+    case 'NEXT_SUB_PHASE':
+      if (!state) return null;
+      
+      // 推し活フェーズでのみサブフェーズ遷移を処理
+      if (state.currentPhase !== 'oshikatsu-card-reveal' && 
+          state.currentPhase !== 'oshikatsu-goods' && 
+          state.currentPhase !== 'oshikatsu-placement') {
+        return state;
+      }
+
+      const nextSubPhase = getNextOshikatsuSubPhase(state.currentSubPhase);
+      
+      // サブフェーズが完了した場合は次のメインフェーズに移行
+      if (nextSubPhase === null) {
+        const { nextRound: nextRoundForSubPhase, nextPhase: nextPhaseForSubPhase } = 
+          getNextGameState(state.currentRound, state.currentPhase);
+        
+        return {
+          ...state,
+          currentPhase: nextPhaseForSubPhase,
+          currentSubPhase: undefined,
+          currentRound: nextRoundForSubPhase
+        };
+      }
+
+      // フェーズアクションをリセット
+      const resetSubPhaseActions: { [playerId: string]: boolean } = {};
+      state.players.forEach(player => {
+        resetSubPhaseActions[player.id] = false;
+      });
+
+      return {
+        ...state,
+        currentSubPhase: nextSubPhase,
+        turnManager: {
+          ...state.turnManager,
+          phaseActions: resetSubPhaseActions,
           waitingForPlayers: state.players.map(p => p.id)
         }
       };
@@ -465,14 +539,8 @@ const gameReducer = (state: GameSession | null, action: GameAction): GameSession
       if (!state) return null;
       const { playerId: buyerPlayerId, goodsType } = action.payload;
       
-      // グッズの価格設定
-      const goodsPrices = {
-        uchiwa: 1,
-        penlight: 1,
-        sashiire: 2
-      };
-      
-      const price = goodsPrices[goodsType];
+      // グッズの価格設定（定数から取得）
+      const price = GOODS_PRICES[goodsType];
       const buyer = state.players.find(p => p.id === buyerPlayerId);
       
       if (!buyer || buyer.money < price) {
@@ -736,6 +804,10 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     dispatch({ type: 'NEXT_PHASE' });
   };
 
+  const nextSubPhase = () => {
+    dispatch({ type: 'NEXT_SUB_PHASE' });
+  };
+
   const setPlayerActionCompleted = (playerId: string, completed: boolean) => {
     dispatch({ type: 'SET_PLAYER_ACTION_COMPLETED', payload: { playerId, completed } });
   };
@@ -891,6 +963,7 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       movePiece,
       nextTurn,
       nextPhase,
+      nextSubPhase,
       setPlayerActionCompleted,
       isPlayerTurn,
       areAllPlayersReady,

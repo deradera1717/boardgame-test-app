@@ -3,7 +3,7 @@
  * ゲーム状態のシリアライゼーション、ローカルストレージ管理、ログ記録機能を提供
  */
 
-import { GameSession, Player, RoundResult, GameState } from '../types/game';
+import { GameSession, Player, RoundResult, GameState, GameLogEntry } from '../types/game';
 
 // ローカルストレージのキー定義
 export const STORAGE_KEYS = {
@@ -13,17 +13,7 @@ export const STORAGE_KEYS = {
   GAME_STATISTICS: 'oshi-game-statistics'
 } as const;
 
-// ログエントリの型定義
-export interface GameLogEntry {
-  timestamp: Date;
-  gameId: string;
-  roundNumber: number;
-  phase: string;
-  playerId?: string;
-  action: string;
-  details: any;
-  result?: any;
-}
+// ログエントリの型定義は types/game.ts から import
 
 // ゲーム履歴の型定義
 export interface GameHistoryEntry {
@@ -221,19 +211,17 @@ export const logGameAction = (
   phase: string,
   action: string,
   details: any,
-  playerId?: string,
+  playerId?: string | null,
   result?: any
 ): void => {
   try {
     const logEntry: GameLogEntry = {
       timestamp: new Date(),
-      gameId,
-      roundNumber,
-      phase,
-      playerId,
       action,
-      details,
-      result
+      playerId,
+      data: { details, result, gameId },
+      roundNumber,
+      phase: phase as any // GamePhase type conversion
     };
     
     const existingLogs = getGameLogs(gameId);
