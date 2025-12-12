@@ -61,15 +61,34 @@ const OtakuPieceComponent: React.FC<OtakuPieceProps> = ({
         display: 'inline-block',
         cursor: draggable ? 'grab' : 'default',
         opacity: isDragging ? 0.5 : 1,
-        transform: isDragging ? 'scale(1.1)' : 'scale(1)',
-        transition: 'opacity 0.2s, transform 0.2s',
+        transform: isDragging ? 'scale(1.1) rotate(5deg)' : 'scale(1)',
+        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
         '&:active': {
-          cursor: draggable ? 'grabbing' : 'default'
+          cursor: draggable ? 'grabbing' : 'default',
+          transform: 'scale(0.95)'
         },
         '&:hover': {
-          transform: draggable ? 'scale(1.05)' : 'scale(1)'
+          transform: draggable ? 'scale(1.1) translateY(-2px)' : 'scale(1)',
+          filter: 'brightness(1.1)'
+        },
+        '&:focus': {
+          outline: '2px solid',
+          outlineColor: 'primary.main',
+          outlineOffset: '2px'
         },
         ...style
+      }}
+      tabIndex={draggable ? 0 : -1}
+      role={draggable ? 'button' : 'img'}
+      aria-label={`${piece.playerId}のオタクコマ${piece.goods ? ` - ${piece.goods}付き` : ''}${piece.isKagebunshin ? ' - 影分身' : ''}`}
+      onKeyDown={(e) => {
+        if (draggable && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          // キーボードでのドラッグ開始をシミュレート
+          if (onDragStart) {
+            onDragStart(piece.id);
+          }
+        }
       }}
     >
       <Chip

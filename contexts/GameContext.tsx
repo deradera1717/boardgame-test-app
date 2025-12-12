@@ -1,7 +1,16 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect } from 'react';
-import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece } from '../types/game';
+import { GameSession, GameState, Player, HanamichiBoard, BoardSpot, OshiPiece, GamePhase, TurnManager, RewardDistributionCard, OshikatsuDecision, GoodsType, OtakuPiece, GameError } from '../types/game';
 import { createRewardDistributionCards, rollDice, processLaborPhase, createAllFanserviceSpotCards, prepareOshikatsuPhaseCards, processFansaTime, isGameComplete, calculateFinalResults, cleanupRoundEnd, getNextGameState } from '../utils/gameLogic';
 import { useGamePersistence } from '../hooks/useGamePersistence';
+import { useErrorHandler } from '../hooks/useErrorHandler';
+import { 
+  validatePlayerName, 
+  validatePlayerCount, 
+  validateGoodsPurchase, 
+  validatePiecePlacement,
+  validatePhaseAction,
+  repairGameState
+} from '../utils/errorHandling';
 
 interface GameContextType {
   gameSession: GameSession | null;
@@ -32,6 +41,11 @@ interface GameContextType {
   saveGameManually: () => boolean;
   exportGameData: (gameId?: string) => string | null;
   loadSavedGame: () => GameSession | null;
+  // エラーハンドリング機能
+  currentError: GameError | null;
+  clearError: () => void;
+  validateGameState: () => GameError[];
+  repairGameStateIfNeeded: () => boolean;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -647,6 +661,17 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   
   // データ永続化とログ記録の統合
   const { loadSavedGame, saveGame, logAction, exportGameData, isGameStateValid } = useGamePersistence(gameSession);
+  
+  // エラーハンドリングの統合
+  const { 
+    currentError, 
+    clearError, 
+    showError, 
+    validateOperation, 
+    safeExecute, 
+    validateGameState: validateGameStateErrors,
+    recoverFromError
+  } = useErrorHandler();
 
   // 初期化時に保存されたゲームを読み込み
   useEffect(() => {
@@ -657,8 +682,26 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const initializeGame = (players: Player[]) => {
-    dispatch({ type: 'INITIALIZE_GAME', payload: players });
-    logAction('GAME_INITIALIZED', { playerCount: players.length, playerNames: players.map(p => p.name) });
+    // プレイヤー数のバリデーション
+    const playerCountError = validatePlayerCount(players.length);
+    if (playerCountError) {
+      showError(playerCountError);
+      return;
+    }
+    
+    // プレイヤー名の重複チェック
+    for (let i = 0; i < players.length; i++) {
+      const nameError = validatePlayerName(players[i].name, players.slice(0, i));
+      if (nameError) {
+        showError(nameError);
+        return;
+      }
+    }
+    
+    safeExecute(() => {
+      dispatch({ type: 'INITIALIZE_GAME', payload: players });
+      logAction('GAME_INITIALIZED', { playerCount: players.length, playerNames: players.map(p => p.name) });
+    });
   };
 
   const updateGameState = (updates: Partial<GameState>) => {
@@ -666,7 +709,23 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const movePiece = (pieceId: string, spotId: number) => {
-    dispatch({ type: 'MOVE_PIECE', payload: { pieceId, spotId } });
+    if (!gameSession) return;
+    
+    // 配置のバリデーション
+    const placementError = validatePiecePlacement(pieceId, spotId, gameSession);
+    if (placementError) {
+      showError(placementError);
+      return;
+    }
+    
+    // フェーズチェック
+    if (!validateOperation('placePiece', gameSession, { pieceId, spotId })) {
+      return;
+    }
+    
+    safeExecute(() => {
+      dispatch({ type: 'MOVE_PIECE', payload: { pieceId, spotId } });
+    });
   };
 
   const nextTurn = () => {
@@ -732,30 +791,22 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const purchaseGoods = (playerId: string, goodsType: GoodsType): boolean => {
     if (!gameSession) return false;
     
-    const player = gameSession.players.find(p => p.id === playerId);
-    if (!player) return false;
+    // グッズ購入のバリデーション
+    const purchaseError = validateGoodsPurchase(playerId, goodsType, gameSession);
+    if (purchaseError) {
+      showError(purchaseError);
+      return false;
+    }
     
-    // グッズの価格設定
-    const goodsPrices = {
-      uchiwa: 1,
-      penlight: 1,
-      sashiire: 2
-    };
+    // フェーズチェック
+    if (!validateOperation('purchaseGoods', gameSession, { playerId, goodsType })) {
+      return false;
+    }
     
-    const price = goodsPrices[goodsType];
-    
-    // 資金チェック
-    if (player.money < price) return false;
-    
-    // 利用可能なオタクコマチェック
-    const availablePiece = player.otakuPieces.find(piece => 
-      !piece.goods && piece.boardSpotId === undefined
-    );
-    
-    if (!availablePiece) return false;
-    
-    dispatch({ type: 'PURCHASE_GOODS', payload: { playerId, goodsType } });
-    return true;
+    return safeExecute(() => {
+      dispatch({ type: 'PURCHASE_GOODS', payload: { playerId, goodsType } });
+      return true;
+    }, false);
   };
 
   const createKagebunshin = (playerId: string, originalPieceId: string): string | null => {
@@ -812,6 +863,26 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return saveGame(gameSession);
   };
 
+  // ゲーム状態の検証
+  const validateGameState = (): GameError[] => {
+    if (!gameSession) return [];
+    return validateGameStateErrors(gameSession);
+  };
+
+  // ゲーム状態の修復
+  const repairGameStateIfNeeded = (): boolean => {
+    if (!gameSession) return false;
+    
+    const errors = validateGameState();
+    if (errors.length === 0) return false;
+    
+    return safeExecute(() => {
+      const repairedSession = repairGameState(gameSession);
+      dispatch({ type: 'LOAD_SAVED_GAME', payload: repairedSession });
+      return true;
+    }, false);
+  };
+
   return (
     <GameContext.Provider value={{
       gameSession,
@@ -840,7 +911,11 @@ export const GameProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       isGameEnded,
       saveGameManually,
       exportGameData,
-      loadSavedGame
+      loadSavedGame,
+      currentError,
+      clearError,
+      validateGameState,
+      repairGameStateIfNeeded
     }}>
       {children}
     </GameContext.Provider>
